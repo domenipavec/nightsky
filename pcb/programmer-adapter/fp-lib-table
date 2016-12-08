@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name attiny841-spi)(type KiCad)(uri "$(KIPRJMOD)/attiny841-spi.pretty")(options "")(descr ""))
+)

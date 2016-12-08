@@ -1,0 +1,6 @@
+(fp_lib_table
+  (lib (name attiny841-spi)(type KiCad)(uri "$(KIPRJMOD)/attiny841-spi.pretty")(options "")(descr ""))
+  (lib (name rj45)(type KiCad)(uri "$(KIPRJMOD)/rj45.pretty")(options "")(descr ""))
+  (lib (name relay)(type KiCad)(uri "$(KIPRJMOD)/relay.pretty")(options "")(descr ""))
+  (lib (name cr2032holder)(type KiCad)(uri "$(KIPRJMOD)/cr2032holder.pretty")(options "")(descr ""))
+)
