@@ -36,9 +36,22 @@
 
 #include "bitop.h"
 #include "io.h"
+#include "exponential.h"
 
 using namespace avr_cpp_lib;
 
+// STATES
+static const uint8_t S_STARS_INIT = 0;
+static const uint8_t S_STARS_START = 1;
+static const uint8_t S_STARS = 2;
+static const uint8_t S_STARS_END = 3;
+static const uint8_t S_TEST_ONE = 8;
+static const uint8_t S_CLOUDS_INIT = 10;
+static const uint8_t S_CLOUDS_START = 11;
+static const uint8_t S_CLOUDS = 12;
+static const uint8_t S_CLOUDS_END = 13;
+
+static volatile uint8_t state = S_CLOUDS_INIT;
 
 static inline void led_test(OutputPin latch, OutputPin clock, OutputPin data, uint8_t n) {
 	data.set();
@@ -87,10 +100,49 @@ static void update_spi_from_brightness() {
 	}
 }
 
+static inline bool delay_ms(uint16_t ms) {
+	bool done = (TCNT1 >> 3) >= ms;
+	if (done) {
+		TCNT1 = 0;
+	}
+	return done;
+}
+
+static inline void set_pwm(const uint8_t v) {
+	OCR2BL = exponential(v);
+}
+
+static inline void process_spi(uint8_t &spi_state, uint8_t &spi_data_index, uint8_t &spi_buffer_index) {
+	if (spi_state == 0) {
+		SPDR = spi_data[spi_buffer_index][spi_data_index];
+		spi_data_index++;
+		spi_state = 1;
+	} else if (spi_state == 1) {
+		if (BITSET(SPSR, SPIF)) {
+			SPDR = spi_data[spi_buffer_index][spi_data_index];
+			spi_data_index++;
+			if (spi_data_index >= spi_data_len) {
+				spi_data_index = 0;
+				SETBIT(PORTB, PB0);
+				CLEARBIT(PORTB, PB0);
+				spi_state = 3;
+			}
+		}
+	} else if (spi_state == 3) {
+		if (TCNT0 >= BIT(spi_buffer_index)) {
+			spi_buffer_index++;
+			if (spi_buffer_index >= spi_buffer_len) {
+				spi_buffer_index = 0;
+			}
+			spi_state = 0;
+		}
+	}
+}
+
 static const uint8_t UART_ADDRESS = 0xf;
 ISR(USART0_RX_vect) {
 	static uint8_t ignore = 0;
-	static uint8_t state = 0;
+	static uint8_t uart_state = 0;
 	static uint8_t led_index = 0;
 
 	uint8_t data = UDR0;
@@ -100,16 +152,32 @@ ISR(USART0_RX_vect) {
 		return;
 	}
 
-	if (state == 0) {
+	if (uart_state == 0) {
 		if (UART_ADDRESS == (data & 0x0f)) {
-			state = 1;
+			uart_state = 1;
+		} else if (0x0c == (data & 0x0f)) {
+			if (state == S_CLOUDS) {
+
+				// reset delay
+				TCNT1 = 0;
+
+				state = S_CLOUDS_END;
+			}
+		} else if (0x0b == (data & 0x0f)) {
+			if (state == S_STARS) {
+
+				// reset delay
+				TCNT1 = 0;
+
+				state = S_STARS_END;
+			}
 		} else {
 			ignore = data >> 4;
 		}
-	} else if (state == 1) {
+	} else if (uart_state == 1) {
 		led_index = data & (32-1);
-		state = data >> 5;
-		if (state == 3) {
+		uart_state = data >> 5;
+		if (uart_state == 3) {
 			// activate only id
 			for (uint8_t bit = 0; bit < 8; bit++) {
 				for (uint8_t brightness_index = 0; brightness_index < brightness_len; brightness_index++) {
@@ -121,22 +189,20 @@ ISR(USART0_RX_vect) {
 				}
 			}
 
-			// disable id in 1 second
-			TCNT1 = 57722;
+			// reset delay
+			TCNT1 = 0;
 
-			state = 0;
+			state = S_TEST_ONE;
+
+			uart_state = 0;
 		}
-	} else if (state == 2) {
+	} else if (uart_state == 2) {
 		eeprom_update_byte(&brightness_eeprom[led_index], data);
 		update_spi_from_brightness();
-		state = 0;
+		uart_state = 0;
 	} else {
-		state = 0;
+		uart_state = 0;
 	}
-}
-
-ISR(TIMER1_COMPB_vect) {
-	update_spi_from_brightness();
 }
 
 int main() {
@@ -150,7 +216,7 @@ int main() {
 
 	enable.clear();
 
-	led_test(latch, clock, data, 32);
+	// led_test(latch, clock, data, 32);
 
 	update_spi_from_brightness();
 
@@ -168,36 +234,116 @@ int main() {
 	// 19200 baud rate
 	UBRR0 = 25;
 
-	// enable timer for one shot id turn off
-	// top
-	OCR1A = 1000;
-	// interrupt value
-	OCR1B = 65534;
-	// counter to 0
+	// inti timer 1 for delay_ms function
 	TCNT1 = 0;
-	// interrupt enable
-	TIMSK1 = BIT(OCIE1B);
-	// ctc, 7812Hz
-	TCCR1B = BIT(WGM12) | BIT(CS12) | BIT(CS10);
+	TCCR1B = BIT(CS12) | BIT(CS10);
+
+	// enable timer 2 for hardware pwm of enable pin or clouds
+	TOCPMCOE = BIT(TOCC0OE) | BIT(TOCC6OE);
+	// fast pwm with set at bottom and clear on compare match, clk/64
+	TCCR2A = BIT(COM2B1) | BIT(WGM20);
+	TCCR2B = BIT(WGM22) | BIT(CS21) | BIT(CS20);
+
+	// enable timer 0 for spi pwm at 31.25khz
+	TCCR0B = BIT(CS02);
+
+	// clouds output enable
+	SETBIT(DDRA, PA1);
 
 	// enable interrupts
 	sei();
 
-	// enable timer for pwm at 31.25khz
-	TCCR0B = BIT(CS02);
+	uint8_t spi_state = 0;
+	uint8_t spi_data_index = 0;
+	uint8_t spi_buffer_index = 0;
+	uint8_t pwm = 0;
 
 	for (;;) {
-		for (uint8_t spi_buffer_index = 0; spi_buffer_index < spi_buffer_len; spi_buffer_index++) {
-			for (uint8_t i = 0; i < spi_data_len; i++) {
-				SPDR = spi_data[spi_buffer_index][i];
-				while (BITCLEAR(SPSR, SPIF));
+		if (state == S_STARS_INIT) {
+			if (delay_ms(200)) {
+				TOCPMSA0 = 0; // disable clouds pwm
+				CLEARBIT(PORTA, PA1);
+
+				update_spi_from_brightness();
+
+				pwm = 255;
+				set_pwm(pwm);
+				TCNT2 = 254;
+				TOCPMSA1 = BIT(TOCC6S1); // enable stars pwm
+
+				// reset delay
+				TCNT1 = 0;
+
+				spi_buffer_index = 0;
+				spi_data_index = 0;
+				spi_state = 0;
+				state = S_STARS_START;
 			}
+		} else if (state == S_STARS_START) {
+			process_spi(spi_state, spi_data_index, spi_buffer_index);
+			if (delay_ms(10)) {
+				pwm--;
+				set_pwm(pwm);
+				if (pwm <= 0) {
+					state = S_STARS;
+				}
+			}
+		} else if (state == S_STARS) {
+			process_spi(spi_state, spi_data_index, spi_buffer_index);
+		} else if (state == S_STARS_END) {
+			process_spi(spi_state, spi_data_index, spi_buffer_index);
+			if (delay_ms(10)) {
+				pwm++;
+				set_pwm(pwm);
+				if (pwm >= 255) {
+					state = S_CLOUDS_INIT;
+				}
+			}
+		} else if (state == S_TEST_ONE) {
+			process_spi(spi_state, spi_data_index, spi_buffer_index);
+			if (delay_ms(1000)) {
+				state = S_STARS_INIT;
+			}
+		} else if (state == S_CLOUDS_INIT) {
+			if (delay_ms(200)) {
+				TOCPMSA1 = 0; // disable stars pwm;
+				enable.set();
 
-			SETBIT(PORTB, PB0);
-			CLEARBIT(PORTB, PB0);
+				pwm = 0;
+				set_pwm(pwm);
+				TCNT2 = 255;
+				TOCPMSA0 = BIT(TOCC0S1); // enable clouds pwm
 
-			while (TCNT0 < BIT(spi_buffer_index));
-			TCNT0 = 0;
+				// reset delay
+				TCNT1 = 0;
+
+				state = S_CLOUDS_START;
+			}
+		} else if (state == S_CLOUDS_START) {
+			if (delay_ms(10)) {
+				pwm++;
+				set_pwm(pwm);
+				if (pwm >= 255) {
+					state = S_CLOUDS;
+				}
+			}
+		} else if (state == S_CLOUDS) {
+
+		} else if (state == S_CLOUDS_END) {
+			if (pwm >= 255) {
+				if (delay_ms(8000)) {
+					pwm--;
+					set_pwm(pwm);
+				}
+			} else if (delay_ms(10)) {
+				pwm--;
+				set_pwm(pwm);
+				if (pwm <= 0) {
+					state = S_STARS_INIT;
+				}
+			}
+		} else {
+			state = S_STARS_INIT;
 		}
 	}
 }
