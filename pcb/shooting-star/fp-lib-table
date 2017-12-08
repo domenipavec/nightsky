@@ -1,0 +1,4 @@
+(fp_lib_table
+  (lib (name led5mm)(type KiCad)(uri "$(KIPRJMOD)/led5mm.pretty")(options "")(descr ""))
+  (lib (name wirepad)(type KiCad)(uri "$(KIPRJMOD)/wirepad.pretty")(options "")(descr ""))
+)
