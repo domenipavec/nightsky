@@ -72,11 +72,44 @@ static const uint8_t spi_buffer_len = 8;
 static volatile uint8_t spi_data[spi_buffer_len][spi_data_len] = {0};
 
 static const uint8_t brightness_len = 32;
-static uint8_t EEMEM brightness_eeprom[brightness_len];
+static const uint8_t brightness_data[brightness_len] = {
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+	255,
+};
 
 static void update_spi_from_brightness() {
 	for (uint8_t brightness_index = 0; brightness_index < brightness_len; brightness_index++) {
-		uint8_t brightness = eeprom_read_byte(&brightness_eeprom[brightness_index]);
+		uint8_t brightness = brightness_data[brightness_index];
 		for (uint8_t bit = 0; bit < 8; bit++) {
 			if (BITSET(brightness, bit)) {
 				SETBIT(spi_data[bit][brightness_index >> 3], brightness_index & 7);
@@ -87,53 +120,53 @@ static void update_spi_from_brightness() {
 	}
 }
 
-static const uint8_t UART_ADDRESS = 0xf;
-ISR(USART0_RX_vect) {
-	static uint8_t ignore = 0;
-	static uint8_t state = 0;
-	static uint8_t led_index = 0;
-
-	uint8_t data = UDR0;
-
-	if (ignore > 0) {
-		ignore--;
-		return;
-	}
-
-	if (state == 0) {
-		if (UART_ADDRESS == (data & 0x0f)) {
-			state = 1;
-		} else {
-			ignore = data >> 4;
-		}
-	} else if (state == 1) {
-		led_index = data & (32-1);
-		state = data >> 5;
-		if (state == 3) {
-			// activate only id
-			for (uint8_t bit = 0; bit < 8; bit++) {
-				for (uint8_t brightness_index = 0; brightness_index < brightness_len; brightness_index++) {
-					if (brightness_index == led_index) {
-						SETBIT(spi_data[bit][brightness_index >> 3], brightness_index & 7);
-					} else {
-						CLEARBIT(spi_data[bit][brightness_index >> 3], brightness_index & 7);
-					}
-				}
-			}
-
-			// disable id in 1 second
-			TCNT1 = 57722;
-
-			state = 0;
-		}
-	} else if (state == 2) {
-		eeprom_update_byte(&brightness_eeprom[led_index], data);
-		update_spi_from_brightness();
-		state = 0;
-	} else {
-		state = 0;
-	}
-}
+// static const uint8_t UART_ADDRESS = 0xf;
+// ISR(USART0_RX_vect) {
+//     static uint8_t ignore = 0;
+//     static uint8_t state = 0;
+//     static uint8_t led_index = 0;
+//
+//     uint8_t data = UDR0;
+//
+//     if (ignore > 0) {
+//         ignore--;
+//         return;
+//     }
+//
+//     if (state == 0) {
+//         if (UART_ADDRESS == (data & 0x0f)) {
+//             state = 1;
+//         } else {
+//             ignore = data >> 4;
+//         }
+//     } else if (state == 1) {
+//         led_index = data & (32-1);
+//         state = data >> 5;
+//         if (state == 3) {
+//             // activate only id
+//             for (uint8_t bit = 0; bit < 8; bit++) {
+//                 for (uint8_t brightness_index = 0; brightness_index < brightness_len; brightness_index++) {
+//                     if (brightness_index == led_index) {
+//                         SETBIT(spi_data[bit][brightness_index >> 3], brightness_index & 7);
+//                     } else {
+//                         CLEARBIT(spi_data[bit][brightness_index >> 3], brightness_index & 7);
+//                     }
+//                 }
+//             }
+//
+//             // disable id in 1 second
+//             TCNT1 = 57722;
+//
+//             state = 0;
+//         }
+//     } else if (state == 2) {
+//         eeprom_update_byte(&brightness_eeprom[led_index], data);
+//         update_spi_from_brightness();
+//         state = 0;
+//     } else {
+//         state = 0;
+//     }
+// }
 
 ISR(TIMER1_COMPB_vect) {
 	update_spi_from_brightness();
