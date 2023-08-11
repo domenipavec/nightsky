@@ -150,7 +150,7 @@ int main() {
 
 	enable.clear();
 
-	led_test(latch, clock, data, 32);
+	// led_test(latch, clock, data, 32);
 
 	update_spi_from_brightness();
 
